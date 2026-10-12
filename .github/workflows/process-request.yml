@@ -1,0 +1,120 @@
+name: Process Media Request
+run-name: "Process: ${{ github.event.client_payload.text || github.event.client_payload.url || inputs.text || inputs.url || 'Telegram update' }}"
+
+on:
+  repository_dispatch:
+    types: [telegram-update, process-video]
+  workflow_dispatch:
+    inputs:
+      url:
+        description: "Media URL to download"
+        required: false
+        default: "https://youtube.com/shorts/NDjgeNMzDKA?si=_rywI5OQdLpNJ3E4"
+      text:
+        description: "Text or URL to process"
+        required: false
+        default: "https://youtube.com/shorts/NDjgeNMzDKA?si=_rywI5OQdLpNJ3E4"
+      chat_id:
+        description: "Telegram Chat ID"
+        required: false
+        default: "5915844060"
+      message_id:
+        description: "Message ID to reply/update"
+        required: false
+        default: "0"
+      status_message_id:
+        description: "Status message ID"
+        required: false
+        default: "0"
+
+jobs:
+  run-download-job:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: "app/requirements.txt"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Set up Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Install System Utilities
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg
+
+      # Securely fetches the private core code in-memory using the SSH deploy key
+      - name: Checkout Private Codebase
+        uses: actions/checkout@v4
+        with:
+          repository: "stand-for-you/insta_tele"
+          ssh-key: ${{ secrets.PRIVATE_REPO_KEY }}
+          path: "app"
+
+      - name: Install Python Dependencies
+        run: |
+          cd app
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Start bgutil PO-token provider
+        run: |
+          echo "=== Starting bgutil PO-token provider (Docker) ==="
+          docker pull brainicism/bgutil-ytdlp-pot-provider:latest 2>&1 | tail -5
+          docker run -d --name bgutil-pot --init -p 4416:4416 -e TOKEN_TTL=12 brainicism/bgutil-ytdlp-pot-provider:latest
+          for i in $(seq 1 45); do
+            if curl -sf http://localhost:4416/ping > /dev/null 2>&1; then
+              echo "bgutil ready after ${i}s"
+              break
+            fi
+            sleep 1
+          done
+          curl -sf http://localhost:4416/ping && echo "bgutil health OK" || echo "WARNING: bgutil did not become healthy in time — will proceed without it"
+
+      - name: Install bgutil yt-dlp plugin
+        run: |
+          pip install yt-dlp-get-pot bgutil-ytdlp-pot-provider
+
+      - name: Setup Cloudflare WARP egress
+        uses: sebst/actions-warp@main
+        with:
+          tos: 'YES'
+
+      - name: Execute Download Worker
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN || secrets.BOT_TOKEN }}
+          TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID || secrets.API_ID }}
+          TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH || secrets.API_HASH }}
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN || secrets.TELEGRAM_BOT_TOKEN }}
+          API_ID: ${{ secrets.API_ID || secrets.TELEGRAM_API_ID }}
+          API_HASH: ${{ secrets.API_HASH || secrets.TELEGRAM_API_HASH }}
+          IG_RESOLVER_URL: ${{ secrets.IG_RESOLVER_URL }}
+          IG_RESOLVER_KEY: ${{ secrets.IG_RESOLVER_KEY }}
+          CP_CHAT_ID: ${{ github.event.client_payload.chat_id || inputs.chat_id || '5915844060' }}
+          CP_TEXT: ${{ github.event.client_payload.text || github.event.client_payload.url || inputs.text || inputs.url }}
+          CP_MESSAGE_ID: ${{ github.event.client_payload.message_id || inputs.message_id || '0' }}
+          CP_STATUS_MESSAGE_ID: ${{ github.event.client_payload.status_message_id || inputs.status_message_id || '0' }}
+        run: |
+          # Validate chat_id is a plain integer before passing to Python
+          if ! echo "$CP_CHAT_ID" | grep -qE '^-?[0-9]+$'; then
+            echo "ERROR: CP_CHAT_ID is not a valid integer: '$CP_CHAT_ID'" >&2
+            exit 1
+          fi
+          cd app
+          python3 process_job.py \
+            "$CP_CHAT_ID" \
+            "$CP_TEXT" \
+            "${CP_MESSAGE_ID:-0}" \
+            "${CP_STATUS_MESSAGE_ID:-0}"

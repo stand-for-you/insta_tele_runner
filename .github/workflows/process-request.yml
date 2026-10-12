@@ -33,6 +33,14 @@ jobs:
     timeout-minutes: 90
 
     steps:
+      # Securely fetches the private core code in-memory using the SSH deploy key
+      - name: Checkout Private Codebase
+        uses: actions/checkout@v4
+        with:
+          repository: "stand-for-you/insta_tele"
+          ssh-key: ${{ secrets.PRIVATE_REPO_KEY }}
+          path: "app"
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -54,14 +62,6 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends ffmpeg
-
-      # Securely fetches the private core code in-memory using the SSH deploy key
-      - name: Checkout Private Codebase
-        uses: actions/checkout@v4
-        with:
-          repository: "stand-for-you/insta_tele"
-          ssh-key: ${{ secrets.PRIVATE_REPO_KEY }}
-          path: "app"
 
       - name: Install Python Dependencies
         run: |

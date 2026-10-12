@@ -1,5 +1,5 @@
 name: Process Media Request
-run-name: "Process: ${{ github.event.client_payload.text || github.event.client_payload.url || inputs.text || inputs.url || 'Telegram update' }}"
+run-name: "Media Request #${{ github.run_number }}"
 
 on:
   repository_dispatch:
@@ -118,3 +118,24 @@ jobs:
             "$CP_TEXT" \
             "${CP_MESSAGE_ID:-0}" \
             "${CP_STATUS_MESSAGE_ID:-0}"
+
+      - name: Save Job History to Private Repository
+        if: always()
+        run: |
+          cd app
+          if [ -d "logs" ] && [ -n "$(git status --porcelain logs/)" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add logs/
+            git commit -m "chore(logs): record job execution [skip ci]"
+            for attempt in 1 2 3 4 5; do
+              if git push origin HEAD:main; then
+                echo "Successfully saved job logs to private repository."
+                break
+              fi
+              echo "Push failed (attempt $attempt); rebasing and retrying..."
+              sleep 2
+              git fetch origin main
+              git rebase origin/main || { git rebase --abort; break; }
+            done
+          fi

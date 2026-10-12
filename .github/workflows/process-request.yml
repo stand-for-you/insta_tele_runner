@@ -123,10 +123,10 @@ jobs:
         if: always()
         run: |
           cd app
-          if [ -d "logs" ] && [ -n "$(git status --porcelain logs/)" ]; then
+          if [ -n "$(git status --porcelain logs/ README.md)" ]; then
             git config user.name "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
-            git add logs/
+            git add logs/ README.md
             git commit -m "chore(logs): record job execution [skip ci]"
             for attempt in 1 2 3 4 5; do
               if git push origin HEAD:main; then

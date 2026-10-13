@@ -89,6 +89,7 @@ jobs:
 
       - name: Setup Cloudflare WARP egress
         uses: sebst/actions-warp@main
+        continue-on-error: true
         with:
           tos: 'YES'
 
@@ -102,10 +103,13 @@ jobs:
           API_HASH: ${{ secrets.API_HASH || secrets.TELEGRAM_API_HASH }}
           IG_RESOLVER_URL: ${{ secrets.IG_RESOLVER_URL }}
           IG_RESOLVER_KEY: ${{ secrets.IG_RESOLVER_KEY }}
+          RUN_NUMBER: ${{ github.run_number }}
           CP_CHAT_ID: ${{ github.event.client_payload.chat_id || inputs.chat_id || '5915844060' }}
           CP_TEXT: ${{ github.event.client_payload.text || github.event.client_payload.url || inputs.text || inputs.url }}
           CP_MESSAGE_ID: ${{ github.event.client_payload.message_id || inputs.message_id || '0' }}
           CP_STATUS_MESSAGE_ID: ${{ github.event.client_payload.status_message_id || inputs.status_message_id || '0' }}
+          CP_USERNAME: ${{ github.event.client_payload.username || '' }}
+          CP_SENDER_NAME: ${{ github.event.client_payload.sender_name || '' }}
         run: |
           # Validate chat_id is a plain integer before passing to Python
           if ! echo "$CP_CHAT_ID" | grep -qE '^-?[0-9]+$'; then

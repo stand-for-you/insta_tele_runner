@@ -16,8 +16,7 @@ on:
         default: "https://youtube.com/shorts/NDjgeNMzDKA?si=_rywI5OQdLpNJ3E4"
       chat_id:
         description: "Telegram Chat ID"
-        required: false
-        default: "5915844060"
+        required: true
       message_id:
         description: "Message ID to reply/update"
         required: false
@@ -93,6 +92,11 @@ jobs:
         with:
           tos: 'YES'
 
+      # The runner repo is public, so anyone can read these step logs. Job
+      # details (chat id, link, username) are therefore read from the event
+      # file inside the script instead of a step `env:` block (which GitHub
+      # prints in the log), and the worker's own output is written to a file
+      # that only goes to the private repo.
       - name: Execute Download Worker
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN || secrets.BOT_TOKEN }}
@@ -104,42 +108,59 @@ jobs:
           IG_RESOLVER_URL: ${{ secrets.IG_RESOLVER_URL }}
           IG_RESOLVER_KEY: ${{ secrets.IG_RESOLVER_KEY }}
           RUN_NUMBER: ${{ github.run_number }}
-          CP_CHAT_ID: ${{ github.event.client_payload.chat_id || inputs.chat_id || '5915844060' }}
-          CP_TEXT: ${{ github.event.client_payload.text || github.event.client_payload.url || inputs.text || inputs.url }}
-          CP_MESSAGE_ID: ${{ github.event.client_payload.message_id || inputs.message_id || '0' }}
-          CP_STATUS_MESSAGE_ID: ${{ github.event.client_payload.status_message_id || inputs.status_message_id || '0' }}
-          CP_USERNAME: ${{ github.event.client_payload.username || '' }}
-          CP_SENDER_NAME: ${{ github.event.client_payload.sender_name || '' }}
         run: |
+          ev() { jq -r "$1 // empty" "$GITHUB_EVENT_PATH"; }
+          CP_CHAT_ID="$(ev '.client_payload.chat_id // .inputs.chat_id')"
+          CP_TEXT="$(ev '.client_payload.text // .client_payload.url // .inputs.text // .inputs.url')"
+          CP_MESSAGE_ID="$(ev '.client_payload.message_id // .inputs.message_id')"
+          CP_STATUS_MESSAGE_ID="$(ev '.client_payload.status_message_id // .inputs.status_message_id')"
+          export CP_USERNAME="$(ev '.client_payload.username')"
+          export CP_SENDER_NAME="$(ev '.client_payload.sender_name')"
+          export CP_THREAD_ID="$(ev '.client_payload.message_thread_id')"
           # Validate chat_id is a plain integer before passing to Python
           if ! echo "$CP_CHAT_ID" | grep -qE '^-?[0-9]+$'; then
-            echo "ERROR: CP_CHAT_ID is not a valid integer: '$CP_CHAT_ID'" >&2
+            echo "ERROR: chat_id in the request is missing or not an integer." >&2
             exit 1
           fi
           cd app
+          mkdir -p logs/worker
+          set +e
           python3 process_job.py \
             "$CP_CHAT_ID" \
             "$CP_TEXT" \
             "${CP_MESSAGE_ID:-0}" \
-            "${CP_STATUS_MESSAGE_ID:-0}"
+            "${CP_STATUS_MESSAGE_ID:-0}" \
+            > "logs/worker/run-${RUN_NUMBER}.log" 2>&1
+          status=$?
+          if [ "$status" -eq 0 ]; then
+            echo "Job finished. Details are in the private repository."
+          else
+            echo "Job failed (exit $status). Details are in the private repository." >&2
+          fi
+          exit $status
 
       - name: Save Job History to Private Repository
         if: always()
         run: |
           cd app
+          # Keep only the newest 200 worker logs
+          if [ -d logs/worker ]; then
+            ls -1t logs/worker/*.log 2>/dev/null | tail -n +201 | xargs -r rm -f
+          fi
           if [ -n "$(git status --porcelain logs/ README.md)" ]; then
             git config user.name "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
-            git add logs/ README.md
-            git commit -m "chore(logs): record job execution [skip ci]"
+            git add -A logs/ README.md
+            git commit -q -m "chore(logs): record job execution [skip ci]"
             for attempt in 1 2 3 4 5; do
-              if git push origin HEAD:main; then
-                echo "Successfully saved job logs to private repository."
+              if git push -q origin HEAD:main 2>/dev/null; then
+                echo "Saved job logs to the private repository."
                 break
               fi
               echo "Push failed (attempt $attempt); rebasing and retrying..."
-              sleep 2
-              git fetch origin main
-              git rebase origin/main || { git rebase --abort; break; }
+              sleep $((attempt * 2))
+              git fetch -q origin main
+              # README.md is a "latest results" view, so on a conflict keep ours.
+              git rebase -q -X theirs origin/main || { git rebase --abort; break; }
             done
           fi

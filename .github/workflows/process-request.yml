@@ -108,6 +108,10 @@ jobs:
           IG_RESOLVER_URL: ${{ secrets.IG_RESOLVER_URL }}
           IG_RESOLVER_KEY: ${{ secrets.IG_RESOLVER_KEY }}
           RUN_NUMBER: ${{ github.run_number }}
+          # Maintenance switch: `gh variable set MAINTENANCE_MODE -b on` pauses the
+          # bot for everyone except the chat ids in the ADMIN_CHAT_IDS secret.
+          MAINTENANCE_MODE: ${{ vars.MAINTENANCE_MODE }}
+          ADMIN_CHAT_IDS: ${{ secrets.ADMIN_CHAT_IDS }}
         run: |
           ev() { jq -r "$1 // empty" "$GITHUB_EVENT_PATH"; }
           CP_CHAT_ID="$(ev '.client_payload.chat_id // .inputs.chat_id')"
@@ -147,6 +151,10 @@ jobs:
           if [ -d logs/worker ]; then
             ls -1t logs/worker/*.log 2>/dev/null | tail -n +201 | xargs -r rm -f
           fi
+          # Topic ids are already pushed by the worker the moment they are created;
+          # re-committing this job's copy could overwrite a newer one.
+          git checkout -q -- logs/topics 2>/dev/null || true
+          git clean -fdq logs/topics 2>/dev/null || true
           if [ -n "$(git status --porcelain logs/ README.md)" ]; then
             git config user.name "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
